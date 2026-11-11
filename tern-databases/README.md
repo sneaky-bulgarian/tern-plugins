@@ -53,10 +53,12 @@ a connection deletes its password.
 ## The pane
 
 On the left, the connections and the chosen one's tables and views; for Redis, its keys (from
-`SCAN`, with type and time to live). <kbd>⇧</kbd><kbd>⌘</kbd><kbd>F</kbd> filters them (for
-Redis, a `MATCH` pattern such as `user:*`). Click a table for its columns, double-click it for
-its first rows; its right-click menu also counts rows, inserts a `SELECT` and copies the name.
-Click a Redis key for its value.
+`SCAN`, with type and time to live). With more than one schema the tables sit under their
+schemas, each with its table count; only the default schema (`public`, `main`, Trino's
+connection schema) starts open, and a click opens or closes one. <kbd>⇧</kbd><kbd>⌘</kbd><kbd>F</kbd>
+filters them, opening every schema with a match (for Redis, a `MATCH` pattern such as
+`user:*`). Click a table for its columns, double-click it for its first rows; its right-click
+menu also counts rows, inserts a `SELECT` and copies the name. Click a Redis key for its value.
 
 On the right, the query editor over the results.
 
@@ -85,8 +87,11 @@ and press <kbd>⌘</kbd><kbd>I</kbd> (or <kbd>⌘</kbd><kbd>⏎</kbd> on it):
 ? the 10 customers who spent most this year, with their email
 ```
 
-The block sends an agent of its session the request, the query under it, the connection and the
-schema (tables, columns and their types; never rows or passwords). It asks the agent it asked
+The block sends an agent of its session the request, the query under it, the connection's name
+and kind, and the schema (tables, columns and their types). It never sends rows, passwords,
+hosts, ports, users, database names or file paths, and tells the agent it has no access to the
+database and must not look for credentials: the block runs the query with its own connection.
+It asks the agent it asked
 last, else one in its own tab, else an idle one; with none in the session it starts one beside
 the block. The agent's query replaces the request in the editor and does not run:
 <kbd>⌘</kbd><kbd>Z</kbd> brings the request back. After a failure, **Ask agent to fix**

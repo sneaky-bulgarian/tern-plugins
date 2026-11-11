@@ -322,6 +322,14 @@ function M.append(state: State, text: string)
 	state.popup, state.mark = nil, nil
 end
 
+-- Opens or closes a schema row ("s:<schema>") of the explorer.
+function M.toggle_schema(state: State, c: Conn, key: string)
+	local name = string.sub(key, 3)
+	local s = model.meta(state, c.id).schema
+	local default = string.lower(if s then s.default_schema or "" else "")
+	state.schemas_open[c.id .. "/" .. name] = not view.schema_open(state, c.id, name, default)
+end
+
 function M.object_action(state: State, act: string, key: string)
 	local c = model.conn(state)
 	if not c then
@@ -899,7 +907,13 @@ function M.filter_key(state: State, key: Key): boolean
 		end
 		if name == "enter" then
 			local o = objects[math.max(at, 1)]
-			M.object_action(state, if model.conn(state) and (model.conn(state) :: Conn).kind == "redis" then "value" else "browse", o.key)
+			local c = model.conn(state) :: Conn
+			if o.kind == "schema" then
+				state.object = o.key
+				M.toggle_schema(state, c, o.key)
+			else
+				M.object_action(state, if c.kind == "redis" then "value" else "browse", o.key)
+			end
 		else
 			at = math.clamp(at + (if name == "down" then 1 else -1), 1, #objects)
 			state.object = objects[at].key
@@ -1581,6 +1595,11 @@ function M.event(state: State, ev: UiEvent)
 			if key and c then
 				if c.kind == "redis" then
 					M.object_action(state, "value", key)
+				elseif string.sub(key, 1, 2) == "s:" then
+					state.object = key
+					if ev.ev == "select" then
+						M.toggle_schema(state, c, key)
+					end
 				elseif ev.ev == "activate" then
 					M.object_action(state, "browse", key)
 				else
@@ -1699,6 +1718,7 @@ function M.new(cx: BlockCx, saved: any): State
 		drafts = drafts,
 		focus = "editor",
 		filter = field.new("", false),
+		schemas_open = {},
 		result = 1,
 		req = 0,
 		pending = {},

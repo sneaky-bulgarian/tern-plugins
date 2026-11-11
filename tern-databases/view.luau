@@ -134,8 +134,28 @@ local function conn_list(state: model.State): Node
 	}, items)
 end
 
--- The explorer's objects: tables and views of a SQL database, keys of Redis.
-export type Object = { key: string, name: string, schema: string?, kind: string, detail: string?, value: string? }
+-- The explorer's objects: tables and views of a SQL database, keys of Redis. With more than
+-- one schema the tables come under schema rows (`kind = "schema"`, key "s:<schema>"); only the
+-- default schema starts open, so a big catalog renders a few rows, not thousands.
+export type Object = {
+	key: string,
+	name: string,
+	schema: string?,
+	kind: string,
+	detail: string?,
+	value: string?,
+	open: boolean?,
+	nested: boolean?,
+}
+
+-- Whether schema `name` of connection `id` is open: the user's choice, else only the default.
+function view.schema_open(state: model.State, id: string, name: string, default: string): boolean
+	local v = state.schemas_open[id .. "/" .. name]
+	if v ~= nil then
+		return v
+	end
+	return string.lower(name) == default
+end
 
 function view.objects(state: model.State): { Object }
 	local c = model.conn(state)
@@ -160,20 +180,63 @@ function view.objects(state: model.State): { Object }
 		return out
 	end
 	local default = string.lower(s.default_schema or "")
+	local groups: { [string]: { number } } = {}
+	local names: { string } = {}
 	for i, t in s.tables do
-		local qualified = string.lower((t.schema or "") .. "." .. t.name)
-		if q == "" or string.find(qualified, q, 1, true) then
-			local shown_schema = if t.schema and string.lower(t.schema) ~= default then t.schema else nil
+		local sch = t.schema or ""
+		local g = groups[sch]
+		if not g then
+			g = {}
+			groups[sch] = g
+			table.insert(names, sch)
+		end
+		if q == "" or string.find(string.lower(sch .. "." .. t.name), q, 1, true) then
+			table.insert(g, i)
+		end
+	end
+	local function add_table(i: number, nested: boolean)
+		local t = s.tables[i]
+		table.insert(out, {
+			key = "t" .. tostring(i),
+			name = t.name,
+			schema = t.schema,
+			kind = t.kind,
+			detail = if t.kind ~= "table" then t.kind else nil,
+			nested = nested,
+		})
+	end
+	if #names <= 1 then
+		local only: { number } = groups[names[1] or ""] or {}
+		for _, i in only do
+			add_table(i, false)
+		end
+		return out
+	end
+	table.sort(names, function(a: string, b: string): boolean
+		local da, db = string.lower(a) == default, string.lower(b) == default
+		if da ~= db then
+			return da
+		end
+		return string.lower(a) < string.lower(b)
+	end)
+	for _, sch in names do
+		local g = groups[sch]
+		if #g > 0 then
+			-- A filter opens every schema with a match.
+			local open = q ~= "" or view.schema_open(state, c.id, sch, default)
 			table.insert(out, {
-				key = "t" .. tostring(i),
-				name = t.name,
-				schema = t.schema,
-				kind = t.kind,
-				detail = if shown_schema and t.kind ~= "table" then shown_schema .. " · " .. t.kind
-					elseif shown_schema then shown_schema
-					elseif t.kind ~= "table" then t.kind
-					else nil,
+				key = "s:" .. sch,
+				name = if sch == "" then "(no schema)" else sch,
+				schema = sch,
+				kind = "schema",
+				value = tostring(#g),
+				open = open,
 			})
+			if open then
+				for _, i in g do
+					add_table(i, true)
+				end
+			end
 		end
 	end
 	return out
@@ -198,7 +261,11 @@ local function explorer(state: model.State): Node
 		local total = if m.dbsize then " of " .. grouped(m.dbsize) else ""
 		count = plural(#objects, "key") .. total
 	else
-		count = plural(#objects, "table")
+		local s = m.schema
+		count = plural(if s then #s.tables else 0, "table")
+		if s and #s.schemas > 1 then
+			count ..= " in " .. plural(#s.schemas, "schema")
+		end
 	end
 	table.insert(kids, ui.node("row", { key = "objhead", justify = "between", align = "center" }, {
 		text("label", { ui.span(if redis then "Keys" else "Tables", "strong"), ui.span("  " .. count, "muted") }),
@@ -230,6 +297,15 @@ local function explorer(state: model.State): Node
 	else
 		local items: { Node } = {}
 		for _, o in objects do
+			if o.kind == "schema" then
+				table.insert(items, ui.node("item", {
+					key = o.key,
+					label = { ui.span(if o.open then "▾ " else "▸ ", "muted"), ui.span(o.name, "strong") },
+					value = { ui.span(o.value or "", "muted") },
+					icon = "folder",
+				}))
+				continue
+			end
 			local menu: { any } = if redis
 				then { { id = "insert=" .. o.key, label = "Insert into the query", icon = "path-insert" }, { id = "copyname=" .. o.key, label = "Copy key", icon = "copy" } }
 				else {
@@ -240,7 +316,7 @@ local function explorer(state: model.State): Node
 				}
 			table.insert(items, ui.node("item", {
 				key = o.key,
-				label = o.name,
+				label = if o.nested then { ui.span("\u{2003}"), ui.span(o.name) } else o.name,
 				detail = o.detail,
 				value = o.value,
 				icon = KIND_ICON[o.kind] or (if redis then "key" else "grid"),

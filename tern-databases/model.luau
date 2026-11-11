@@ -113,6 +113,8 @@ export type State = {
 	focus: string,
 	filter: field.Field,
 	object: string?,
+	-- Explorer schema groups the user opened or closed, by connection id .. "/" .. schema.
+	schemas_open: { [string]: boolean },
 	popup: Popup?,
 	run: Run?,
 	result: number,

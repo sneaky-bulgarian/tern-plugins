@@ -153,9 +153,14 @@ function ask.prompt(r: Request): string
 	local lang = if redis then "redis" else "sql"
 	local what = if redis then "Redis commands" else kind.label .. " SQL"
 	local parts: { string } = {}
+	-- Only the dialect and the connection's name: no host, port, user, database or file path,
+	-- so the agent has nothing to connect with. The block runs the query with its own credentials.
 	table.insert(parts, string.format(
-		"Write %s for me. I'm in Tern's Databases block, connected to %q (%s%s).",
-		what, r.conn.name, r.server or kind.label, " at " .. conns.detail(r.conn)))
+		"Write %s for me. I'm in Tern's Databases block, connected to %q (%s).",
+		what, r.conn.name, r.server or kind.label))
+	table.insert(parts, "You have no access to this database or its credentials, and need none: don't try to "
+		.. "connect, and don't look for passwords, connection strings, keychain items or config files. "
+		.. "Write it from the schema below; the block runs it with its own connection.")
 	if #r.requests > 0 then
 		table.insert(parts, "\nWhat I want:\n" .. table.concat(r.requests, "\n"))
 	end
