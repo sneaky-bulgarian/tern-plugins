@@ -44,11 +44,27 @@ without sessions jumps to the nearest folder above it that has some.
 | click | Select; on a folder, also open or close it |
 | ⏎, double-click | Resume the session in a new tab |
 | ⇧⏎ | Resume it in a split beside the browser |
-| Esc, ⌫ | Clear the filter, delete a character |
+| Esc, ⌫ | Close the New session menu or clear the filter, delete a character |
 | F5 | Read the sessions again |
 
-The dock has the same actions as buttons, plus **Copy ID** for a session and **New session
-here** for a folder.
+The dock has the same actions as buttons, plus **Copy ID** for a session and **New session ▾**
+for a folder.
+
+## Start a session in a folder
+
+**New session ▾** on a folder's dock opens a menu that starts omp in a new tab:
+
+- **Here**, or **Here in split** beside the browser.
+- **In a subfolder**: the folder's subfolders, read from disk when the menu opens, so folders
+  with no sessions yet are there too (hidden ones left out, first 24 shown).
+- **In a worktree**: the folder's other git worktrees.
+
+<p align="center">
+  <img src="docs/new-in-subfolder.gif" alt="Opening New session on a folder and starting omp in its api subfolder" width="100%">
+</p>
+<p align="center">
+  <img src="docs/new-in-worktree.gif" alt="Starting omp in a git worktree of the folder from the New session menu" width="100%">
+</p>
 
 ## How it works
 

@@ -7,6 +7,14 @@ local FILTER_ID = "main.filter"
 local REFRESH_MS = 30000
 local SCAN_TIMEOUT_MS = 20000
 local DOUBLE_CLICK_MS = 400
+local PICK_MAX = 24
+
+-- Lists a folder's subfolders (D <name>) and its git worktrees (W <path>) for the New session menu.
+local PICK = [[
+cd "$1" 2>/dev/null || exit 0
+for d in */; do [ -d "$d" ] && printf 'D %s\n' "${d%/}"; done
+git worktree list --porcelain 2>/dev/null | sed -n 's/^worktree /W /p'
+]]
 
 local SCAN = [[
 root=$1
@@ -57,6 +65,13 @@ type Row = {
 	hits: number?,
 }
 
+type Pick = {
+	path: string,
+	subs: { string },
+	trees: { string },
+	loading: boolean,
+}
+
 type State = {
 	cx: BlockCx,
 	home: string?,
@@ -76,6 +91,7 @@ type State = {
 	focused: boolean,
 	toggled: { key: string, at: number }?,
 	reveal: string?,
+	pick: Pick?,
 }
 
 local function alive(pane: number): boolean
@@ -510,6 +526,41 @@ local function launch(cx: BlockCx, verb: string, how: string, cwd: string, path:
 	cx:open(url)
 end
 
+local function join(dir: string, name: string): string
+	return if string.sub(dir, -1) == "/" then dir .. name else dir .. "/" .. name
+end
+
+-- Opens the New session menu of a folder, reading its subfolders and worktrees from disk.
+local function open_pick(state: State, path: string)
+	local pick: Pick = { path = path, subs = {}, trees = {}, loading = true }
+	state.pick = pick
+	local cx = state.cx
+	local ok, err = pcall(function()
+		tern.process.run({ "/bin/sh", "-c", PICK, "sh", path }, { timeout_ms = 5000 }, function(r: ProcessResult, _)
+			if state.pick ~= pick or not alive(cx.pane) then
+				return
+			end
+			pick.loading = false
+			for line in string.gmatch(r.stdout, "[^\n]+") do
+				local kind, rest = string.sub(line, 1, 1), string.sub(line, 3)
+				if kind == "D" then
+					table.insert(pick.subs, rest)
+				elseif kind == "W" and rest ~= path then
+					table.insert(pick.trees, rest)
+				end
+			end
+			table.sort(pick.subs, function(a: string, b: string): boolean
+				return string.lower(a) < string.lower(b)
+			end)
+			cx:render()
+		end)
+	end)
+	if not ok then
+		pick.loading = false
+		cx:toast("error", "Could not read the folder", tostring(err))
+	end
+end
+
 local function current(state: State): Row?
 	local at = state.cursor and state.index[state.cursor]
 	return if at then state.rows[at] else nil
@@ -622,6 +673,56 @@ local function filter_view(state: State): Node
 	})
 end
 
+-- The New session menu: this folder, then its subfolders, then its other git worktrees.
+local function pick_view(state: State, path: string): Node
+	local pick = state.pick
+	if pick == nil or pick.path ~= path then
+		return ui.col({})
+	end
+	local lines: { Node } = {
+		ui.row({
+			button("Here", "start=" .. path, { icon = "plus" }),
+			button("Here in split", "start-split=" .. path, { icon = "split" }),
+		}),
+	}
+	if pick.loading then
+		table.insert(lines, ui.text({ ui.span("Reading subfolders…", "dim") }))
+		return ui.col(lines)
+	end
+	local function group(title: string, paths: { string }, show: (string) -> string, icon: string)
+		if #paths == 0 then
+			return
+		end
+		table.insert(lines, ui.text({ ui.span(title, "muted") }))
+		local btns: { Node } = {}
+		for i, p in paths do
+			if i > PICK_MAX then
+				table.insert(lines, ui.text({ ui.span("+" .. (#paths - PICK_MAX) .. " more", "dim") }))
+				break
+			end
+			table.insert(btns, button(show(p), "start=" .. p, { icon = icon, variant = "quiet" }))
+			if #btns == 4 or i == #paths then
+				table.insert(lines, ui.row(btns))
+				btns = {}
+			end
+		end
+	end
+	local subs: { string } = {}
+	for i, name in pick.subs do
+		subs[i] = join(path, name)
+	end
+	group("In a subfolder", subs, function(p: string): string
+		return string.match(p, "([^/]+)$") or p
+	end, "folder")
+	group("In a worktree", pick.trees, function(p: string): string
+		return shorten(p, state.home)
+	end, "git-branch")
+	if #subs == 0 and #pick.trees == 0 then
+		table.insert(lines, ui.text({ ui.span("No subfolders", "dim") }))
+	end
+	return ui.col(lines)
+end
+
 local function details(state: State): { Node }
 	local row = current(state)
 	if row == nil then
@@ -656,9 +757,14 @@ local function details(state: State): { Node }
 			ui.span(if f.latest > 0 then "  ·  last active " .. ago(f.latest) else "", "muted"),
 		}),
 		ui.row({
-			button("New session here", "new=tab", { icon = "plus", variant = "primary" }),
+			button(
+				if state.pick and state.pick.path == f.path then "New session ▴" else "New session ▾",
+				"pick",
+				{ icon = "plus", variant = "primary" }
+			),
 			button(if is_open(state, f.path, row.depth) then "Collapse" else "Expand", "toggle", { keys = { "enter" } }),
 		}),
+		pick_view(state, f.path),
 	}
 end
 
@@ -819,6 +925,10 @@ tern.block.define("browser", {
 		elseif name == "enter" then
 			activate(state, cx, row, if key.shift then "split" else "tab")
 		elseif name == "escape" then
+			if state.pick then
+				state.pick = nil
+				return true
+			end
 			if state.query == "" then
 				return false
 			end
@@ -866,8 +976,15 @@ tern.block.define("browser", {
 			local row = current(state)
 			if ev.act == "resume" then
 				activate(state, cx, row, if ev.value == "split" then "split" else "tab")
-			elseif ev.act == "new" and row and row.folder then
-				launch(cx, "new", "tab", row.folder.path, nil)
+			elseif ev.act == "pick" and row and row.folder then
+				if state.pick and state.pick.path == row.folder.path then
+					state.pick = nil
+				else
+					open_pick(state, row.folder.path)
+				end
+			elseif (ev.act == "start" or ev.act == "start-split") and type(ev.value) == "string" then
+				state.pick = nil
+				launch(cx, "new", if ev.act == "start-split" then "split" else "tab", ev.value, nil)
 			elseif ev.act == "toggle" and row then
 				toggle(state, row)
 			elseif ev.act == "copy-id" and row and row.session then
